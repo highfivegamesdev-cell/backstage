@@ -178,28 +178,36 @@ function parseRoute() {
   return { name, params: new URLSearchParams(qs || "") };
 }
 
+// Each navigation gets a number; a screen whose data arrives after the user has moved on is dropped,
+// so a slow load can't draw over the page they're now on.
+let routeSeq = 0;
+const isStale = (seq) => seq !== routeSeq;
+
 async function route() {
   if (!state.me || !$("#view")) return;
+  const seq = ++routeSeq;
   const { name, params } = parseRoute();
   const view = NAV.find(([k, , ok]) => k === name && ok()) ? name : "showtimes";
   $$(".nav a").forEach((a) => (a.dataset.k === view ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current")));
   const el = $("#view");
   el.innerHTML = '<p class="dim">Loading…</p>';
   try {
-    await ({ showtimes, games: gamesView, mine: mineView, crew: crewView, profile: profileView })[view](el, params);
+    await ({ showtimes, games: gamesView, mine: mineView, crew: crewView, profile: profileView })[view](el, params, seq);
   } catch (err) {
+    if (isStale(seq)) return;
     el.innerHTML = `<p class="msg err">Something went wrong: ${esc(friendlyError(err))}</p>`;
   }
 }
 
 // ------------------------------------------------------------------ Showtimes (schedule grid)
-async function showtimes(el, params) {
+async function showtimes(el, params, seq) {
   const day = params.get("d") ? parseYmd(params.get("d")) : startOfDay(new Date());
   const dayStart = startOfDay(day);
   const dayEnd = addDays(dayStart, 1);
   // include games from the evening before that run past midnight
   const games = (await api.games(new Date(dayStart.getTime() - 8 * 3600e3).toISOString(), dayEnd.toISOString()))
     .filter((g) => endOf(g) > dayStart);
+  if (isStale(seq)) return;
   const cols = [{ id: null, label: "Unscheduled" }, ...crew().map((p) => ({ id: p.id, label: nameOf(p.id) }))];
   const rows = (24 * 60) / ROW_MIN;
   const go = (d) => `#/showtimes?d=${ymd(d)}`;
@@ -425,12 +433,13 @@ function wireItems(el, games) {
   });
 }
 
-async function gamesView(el, params) {
+async function gamesView(el, params, seq) {
   const tab = params.get("tab") || "upcoming";
   const now = new Date();
   const games = tab === "past"
     ? (await api.games(addDays(now, -120).toISOString(), now.toISOString())).reverse()
     : await api.games(now.toISOString(), null);
+  if (isStale(seq)) return;
   const list = tab === "unscheduled" ? games.filter((g) => !g.assignments.length) : games;
   el.innerHTML = `<div class="page-head"><h1>Games</h1>${canSchedule() ? `<button class="btn btn-sm" id="new">${icon("plus")} New game</button>` : ""}</div>
     <div class="toolbar"><div class="tabs">${[["upcoming", "Upcoming"], ["unscheduled", "Unscheduled"], ["past", "Past"]].map(([k, l]) =>
@@ -446,8 +455,9 @@ async function gamesView(el, params) {
 }
 
 // ------------------------------------------------------------------ My games
-async function mineView(el) {
+async function mineView(el, params, seq) {
   const all = await api.games(null, null);
+  if (isStale(seq)) return;
   const mine = all.filter((g) => g.assignments.some((a) => a.user_id === state.me.id));
   const now = new Date();
   const upcoming = mine.filter((g) => endOf(g) >= now);
@@ -472,8 +482,9 @@ async function mineView(el) {
 }
 
 // ------------------------------------------------------------------ Profile
-async function profileView(el) {
+async function profileView(el, params, seq) {
   const d = await api.myDetails(state.me.id);
+  if (isStale(seq)) return;
   el.innerHTML = `<div class="page-head"><h1>Your profile</h1></div>
     <form class="card" id="pf" style="max-width:640px;display:grid;gap:16px" novalidate>
       <div class="form-grid">
@@ -519,8 +530,9 @@ async function profileView(el) {
 }
 
 // ------------------------------------------------------------------ Crew (schedulers see, super admins manage)
-async function crewView(el) {
+async function crewView(el, params, seq) {
   await loadCrew();
+  if (isStale(seq)) return;
   const det = Object.fromEntries(state.details.map((d) => [d.id, d]));
   const people = [...state.profiles].sort((a, b) => (a.active - b.active) || nameOf(a.id).localeCompare(nameOf(b.id)));
   const pendingCount = people.filter((p) => !p.active).length;
