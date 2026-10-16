@@ -8,6 +8,9 @@ Crew scheduling for High Five Games, at **https://backstage.highfive.games**.
 - **My games**: your upcoming games and history.
 - **Crew**: everyone's details (schedulers); approve accounts and change roles (super admin).
 - **Profile**: name, phone, preferred payment method and payout email/handle. No bank details.
+- **Time zones**: the clock dropdown in the top bar switches every time on the site to any time zone
+  (remembered per device; defaults to the device's zone). Games are stored as exact instants, so
+  everyone sees the same game at the right local time, including across daylight saving changes.
 
 ## Roles
 

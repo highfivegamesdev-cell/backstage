@@ -7,22 +7,53 @@ const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const app = $("#app");
 const modal = $("#modal");
-const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+// ---- time zones: every date and time in the app is shown and entered in TZ, switchable in the top bar.
+const DEVICE_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const validTz = (tz) => { try { new Intl.DateTimeFormat("en", { timeZone: tz }); return true; } catch { return false; } };
+let TZ = (() => { try { const t = localStorage.getItem("backstage.tz"); return t && validTz(t) ? t : DEVICE_TZ; } catch { return DEVICE_TZ; } })();
+const COMMON_TZ = [
+  ["America/Los_Angeles", "Los Angeles (Pacific)"], ["America/Denver", "Denver (Mountain)"], ["America/Chicago", "Chicago (Central)"],
+  ["America/New_York", "New York (Eastern)"], ["America/Sao_Paulo", "São Paulo"], ["Europe/London", "London"],
+  ["Europe/Amsterdam", "Amsterdam / Central Europe"], ["Africa/Johannesburg", "Johannesburg"], ["Asia/Dubai", "Dubai"],
+  ["Asia/Kolkata", "India"], ["Asia/Manila", "Manila"], ["Asia/Singapore", "Singapore"], ["Asia/Tokyo", "Tokyo"],
+  ["Australia/Sydney", "Sydney"], ["Pacific/Auckland", "Auckland"], ["UTC", "UTC"],
+];
+const tzOffsetLabel = (tz, at = new Date()) =>
+  new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "shortOffset" }).formatToParts(at).find((x) => x.type === "timeZoneName")?.value || "";
+const tzCity = (tz) => (COMMON_TZ.find(([z]) => z === tz)?.[1]) || tz.split("/").pop().replace(/_/g, " ");
+const partFmt = new Map();
+function partsIn(date) {
+  if (!partFmt.has(TZ)) partFmt.set(TZ, new Intl.DateTimeFormat("en-US", { timeZone: TZ, hourCycle: "h23", year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", second: "numeric" }));
+  const o = {};
+  for (const { type, value } of partFmt.get(TZ).formatToParts(new Date(date))) o[type] = +value;
+  return { y: o.year, m: o.month, d: o.day, h: o.hour % 24, mi: o.minute, s: o.second };
+}
+// Wall-clock time in TZ → real instant (handles daylight saving; overflowing days/minutes roll over).
+function zoned(y, m, d, h = 0, mi = 0) {
+  const wall = Date.UTC(y, m - 1, d, h, mi);
+  let t = wall;
+  for (let i = 0; i < 2; i++) {
+    const p = partsIn(t);
+    t = wall - (Date.UTC(p.y, p.m - 1, p.d, p.h, p.mi, p.s) - t);
+  }
+  return new Date(t);
+}
 const ROLE_LABEL = { super_admin: "Super admin", scheduler: "Scheduler", employee: "Crew" };
 const CREW_ROLES = ["Host", "Game Leader", "Scorekeeper", "Co-host"];
 const COLORS = ["pink", "orange", "yellow", "blue", "green", "gray"];
 const PAYMENT = ["", "PayPal", "Wise", "Bank transfer", "Revolut", "Payoneer", "Other"];
 const ROW_MIN = 15;
 
-const fmtTime = (d) => new Date(d).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-const fmtDay = (d) => new Date(d).toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
-const fmtLongDay = (d) => new Date(d).toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+const fmtTime = (d) => new Date(d).toLocaleTimeString([], { timeZone: TZ, hour: "numeric", minute: "2-digit" });
+const fmtDay = (d) => new Date(d).toLocaleDateString([], { timeZone: TZ, weekday: "short", day: "numeric", month: "short" });
+const fmtLongDay = (d) => new Date(d).toLocaleDateString([], { timeZone: TZ, weekday: "long", day: "numeric", month: "long", year: "numeric" });
 const endOf = (g) => new Date(new Date(g.starts_at).getTime() + g.duration_min * 60000);
-const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
-const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
-const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-const parseYmd = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
-const hhmm = (d) => `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+const startOfDay = (d) => { const p = partsIn(d); return zoned(p.y, p.m, p.d); };
+const addDays = (d, n) => { const p = partsIn(d); return zoned(p.y, p.m, p.d + n, p.h, p.mi); };
+const atTime = (day, h, mi = 0) => { const p = partsIn(day); return zoned(p.y, p.m, p.d, h, mi); };
+const ymd = (d) => { const p = partsIn(d); return `${p.y}-${String(p.m).padStart(2, "0")}-${String(p.d).padStart(2, "0")}`; };
+const parseYmd = (s) => { const [y, m, d] = s.split("-").map(Number); return zoned(y, m, d); };
+const hhmm = (d) => { const p = partsIn(d); return `${String(p.h).padStart(2, "0")}:${String(p.mi).padStart(2, "0")}`; };
 const overlaps = (a, b) => new Date(a.starts_at) < endOf(b) && new Date(b.starts_at) < endOf(a);
 
 function toast(text, isErr = false) {
@@ -163,12 +194,33 @@ function shell() {
   app.innerHTML = `<header class="top"><div class="top-inner">
       <a class="brand" href="#/showtimes"><img src="assets/logo.svg" alt=""><div><b>Backstage</b><span>High Five Games</span></div></a>
       <nav class="nav" aria-label="Main">${NAV.filter(([, , ok]) => ok()).map(([k, l]) => `<a href="#/${k}" data-k="${k}">${l}</a>`).join("")}</nav>
+      <label class="tz-pick" title="Time zone for every time on Backstage"><span class="sr">Time zone</span><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><select id="tz">${tzOptions()}</select></label>
       <div class="who"><span class="name">${esc(nameOf(state.me.id))}</span><span class="badge ${state.me.role}">${ROLE_LABEL[state.me.role]}</span>
         <button class="btn btn-ghost btn-sm" id="signout">Sign out</button></div>
     </div></header>
     ${api.demo ? '<p class="msg warn" style="margin:12px 20px 0">Demo mode: sample data only, nothing is saved.</p>' : ""}
     <main id="view"></main>`;
   $("#signout").onclick = () => api.signOut();
+  $("#tz").onchange = (e) => setTz(e.target.value);
+}
+
+function tzOptions() {
+  const opt = (z, label) => `<option value="${esc(z)}" ${z === TZ ? "selected" : ""}>${esc(label)} (${esc(tzOffsetLabel(z))})</option>`;
+  const all = (Intl.supportedValuesOf ? Intl.supportedValuesOf("timeZone") : []).filter((z) => !COMMON_TZ.some(([c]) => c === z));
+  const known = [DEVICE_TZ, ...COMMON_TZ.map(([z]) => z)];
+  const extra = known.includes(TZ) || all.includes(TZ) ? "" : opt(TZ, TZ);
+  return `<optgroup label="This device">${opt(DEVICE_TZ, `Device: ${tzCity(DEVICE_TZ)}`)}</optgroup>
+    <optgroup label="Common">${COMMON_TZ.map(([z, l]) => opt(z, l)).join("")}${extra}</optgroup>
+    <optgroup label="All time zones">${all.map((z) => opt(z, z.replace(/_/g, " "))).join("")}</optgroup>`;
+}
+
+// Switch zone and redraw. The schedule's ?d=YYYY-MM-DD stays the same calendar day in the new zone.
+function setTz(tz) {
+  if (!validTz(tz)) return;
+  TZ = tz;
+  try { localStorage.setItem("backstage.tz", tz); } catch { /* private mode: still works for this visit */ }
+  toast(`Showing times in ${tzCity(tz)} (${tzOffsetLabel(tz)})`);
+  route();
 }
 
 function parseRoute() {
@@ -219,19 +271,19 @@ async function showtimes(el, params, seq) {
       <input type="date" id="pick" value="${ymd(dayStart)}" aria-label="Jump to date">
       <span class="date-label">${fmtLongDay(dayStart)}</span>
       <span class="spacer"></span>
-      <span class="tz">Times in your time zone (${esc(TZ)})</span>
+      <span class="tz">Times in <b>${esc(tzCity(TZ))}</b> (${esc(tzOffsetLabel(TZ, dayStart))})</span>
       ${canSchedule() ? `<button class="btn btn-sm" id="new">${icon("plus")} New game</button>` : ""}
     </div>
     <div class="grid-wrap"><div class="grid" style="grid-template-columns: 72px repeat(${cols.length}, minmax(170px, 1fr))">
       <div class="g-head corner">Time</div>
       ${cols.map((c) => `<div class="g-head ${c.id ? "" : "unsched"} ${c.id === state.me.id ? "me" : ""}" title="${esc(c.label)}">${esc(c.label)}</div>`).join("")}
-      <div class="g-times" style="height:calc(var(--row) * ${rows})">${Array.from({ length: 24 }, (_, h) => `<div>${fmtTime(new Date(2000, 0, 1, h))}</div>`).join("")}</div>
+      <div class="g-times" style="height:calc(var(--row) * ${rows})">${Array.from({ length: 24 }, (_, h) => `<div>${new Date(Date.UTC(2000, 0, 1, h)).toLocaleTimeString([], { timeZone: "UTC", hour: "numeric", minute: "2-digit" })}</div>`).join("")}</div>
       ${cols.map((c, i) => `<div class="g-col ${c.id ? "" : "unsched"} ${canSchedule() ? "clickable" : ""}" data-col="${i}" style="height:calc(var(--row) * ${rows})"></div>`).join("")}
     </div></div>
     ${games.length ? "" : '<p class="empty-day">No games on this day yet.</p>'}`;
 
   $("#pick").onchange = (e) => e.target.value && (location.hash = `#/showtimes?d=${e.target.value}`);
-  if ($("#new")) $("#new").onclick = () => editGame(null, { starts_at: new Date(dayStart.getTime() + 9 * 3600e3) });
+  if ($("#new")) $("#new").onclick = () => editGame(null, { starts_at: atTime(dayStart, 9) });
 
   const rowPx = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--row"));
   const colEls = $$(".g-col", el);
@@ -255,7 +307,7 @@ async function showtimes(el, params, seq) {
     if (canSchedule()) {
       colEls[i].onclick = (e) => {
         const mins = Math.floor((e.offsetY / rowPx)) * ROW_MIN;
-        editGame(null, { starts_at: new Date(dayStart.getTime() + mins * 60000), user_id: c.id });
+        editGame(null, { starts_at: atTime(dayStart, 0, mins), user_id: c.id });
       };
     }
   });
@@ -306,7 +358,7 @@ function openGame(g) {
     <div class="m-body"><dl class="facts">
       <dt>Game</dt><dd>${esc(g.game)}</dd>
       <dt>Booking</dt><dd>${esc(g.booking_ref) || "—"}</dd>
-      <dt>When</dt><dd>${fmtLongDay(g.starts_at)}<br>${fmtTime(g.starts_at)}–${fmtTime(endOf(g))} <span class="dim">(${g.duration_min} min)</span></dd>
+      <dt>When</dt><dd>${fmtLongDay(g.starts_at)}<br>${fmtTime(g.starts_at)}–${fmtTime(endOf(g))} <span class="dim">${esc(tzCity(TZ))} time · ${g.duration_min} min</span></dd>
       <dt>Players</dt><dd>${g.players ?? "—"}</dd>
       <dt>Crew</dt><dd>${crewList(g)}</dd>
       ${g.notes ? `<dt>Notes</dt><dd style="white-space:pre-wrap">${esc(g.notes)}</dd>` : ""}
@@ -334,7 +386,7 @@ function editGame(g, preset = {}) {
         <label class="field">Game<input name="game" list="titles" value="${esc(g.game)}" required placeholder="e.g. Fabulous Feud"></label>
         <label class="field">Booking #<input name="booking_ref" value="${esc(g.booking_ref)}" placeholder="e.g. B1411"></label>
         <label class="field">Date<input name="date" type="date" value="${ymd(start)}" required></label>
-        <label class="field">Start time<input name="time" type="time" step="900" value="${hhmm(start)}" required></label>
+        <label class="field">Start time <small>${esc(tzCity(TZ))} time</small><input name="time" type="time" step="900" value="${hhmm(start)}" required></label>
         <label class="field">Length<select name="duration_min">${[30, 45, 60, 75, 90, 120].map((m) => `<option value="${m}" ${m === g.duration_min ? "selected" : ""}>${m} minutes</option>`).join("")}
           ${[30, 45, 60, 75, 90, 120].includes(g.duration_min) ? "" : `<option value="${g.duration_min}" selected>${g.duration_min} minutes</option>`}</select></label>
         <label class="field">Players<input name="players" type="number" min="1" inputmode="numeric" value="${esc(g.players ?? "")}"></label>
@@ -364,7 +416,7 @@ function editGame(g, preset = {}) {
     const assignments = $$(".crew-row", rowsEl).map((r) => ({ user_id: $("[name=crew_user]", r).value, role: $("[name=crew_role]", r).value })).filter((a) => a.user_id);
     return {
       game: { id: g.id, client: f.client.value.trim(), booking_ref: f.booking_ref.value.trim(), game: f.game.value.trim(),
-              players: f.players.value ? parseInt(f.players.value, 10) : null, starts_at: f.date.value ? new Date(y, mo - 1, d, h, mi).toISOString() : null,
+              players: f.players.value ? parseInt(f.players.value, 10) : null, starts_at: f.date.value ? zoned(y, mo, d, h, mi).toISOString() : null,
               duration_min: parseInt(f.duration_min.value, 10), color: f.color.value || "pink", notes: f.notes.value.trim() },
       assignments,
     };
@@ -447,7 +499,7 @@ async function gamesView(el, params, seq) {
       <span class="spacer"></span><input type="search" id="q" placeholder="Search client, game or booking #" style="max-width:300px"></div>
     <div class="list" id="list">${list.map(gameItem).join("") || '<p class="none">No games here.</p>'}</div>`;
   wireItems(el, list);
-  if ($("#new")) $("#new").onclick = () => editGame(null, { starts_at: (() => { const d = addDays(startOfDay(now), 1); d.setHours(9); return d; })() });
+  if ($("#new")) $("#new").onclick = () => editGame(null, { starts_at: atTime(addDays(startOfDay(now), 1), 9) });
   $("#q").oninput = (e) => {
     const q = e.target.value.toLowerCase();
     $$(".item", el).forEach((it) => (it.hidden = q && !it.textContent.toLowerCase().includes(q)));
@@ -462,8 +514,9 @@ async function mineView(el, params, seq) {
   const now = new Date();
   const upcoming = mine.filter((g) => endOf(g) >= now);
   const past = mine.filter((g) => endOf(g) < now).reverse();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const thisMonth = mine.filter((g) => new Date(g.starts_at) >= monthStart && new Date(g.starts_at) < new Date(now.getFullYear(), now.getMonth() + 1, 1));
+  const np = partsIn(now);
+  const monthStart = zoned(np.y, np.m, 1), nextMonth = zoned(np.y, np.m + 1, 1);
+  const thisMonth = mine.filter((g) => new Date(g.starts_at) >= monthStart && new Date(g.starts_at) < nextMonth);
   const open = all.filter((g) => !g.assignments.length && new Date(g.starts_at) >= now);
   const roleIn = (g) => g.assignments.find((a) => a.user_id === state.me.id).role;
   const item = (g) => gameItem(g).replace(/<span class="tag[^"]*">[^<]*<\/span>/, `<span class="tag">${esc(roleIn(g))}</span>`);

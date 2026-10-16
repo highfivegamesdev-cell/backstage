@@ -74,6 +74,11 @@ main { padding: 20px; max-width: 1600px; margin: 0 auto; }
 .page-head h1 { font-size: 26px; }
 .card { background: var(--card); border-radius: var(--r); padding: 20px; }
 
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.tz-pick { display: flex; align-items: center; gap: 6px; color: var(--cyan); }
+.tz-pick select { width: auto; max-width: 260px; padding: 6px 8px; font-size: 13px; font-weight: 700; color: var(--ink); background: var(--card); border-color: rgba(61, 224, 255, .35); }
+@media (max-width: 760px) { .tz-pick { order: 2; } .tz-pick select { max-width: 190px; } }
+
 /* Showtimes toolbar */
 .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 .toolbar .date-label { font-family: var(--display); font-size: 20px; font-weight: 600; margin: 0 6px; }
